@@ -21,7 +21,12 @@ import org.apache.tools.ant.Project;
 import org.apache.tools.ant.Task;
 import org.apache.tools.ant.types.FileSet;
 import org.asciidoctor.*;
-import org.asciidoctor.internal.JRubyRuntimeContext;
+import org.asciidoctor.jruby.AbstractDirectoryWalker;
+import org.asciidoctor.jruby.AsciiDocDirectoryWalker;
+import org.asciidoctor.jruby.AsciidoctorJRuby;
+import org.asciidoctor.jruby.DirectoryWalker;
+import org.asciidoctor.jruby.internal.JRubyRuntimeContext;
+import org.jruby.Ruby;
 
 import java.io.File;
 import java.io.FileFilter;
@@ -86,13 +91,13 @@ public class AsciidoctorAntTask extends Task {
             log("Render asciidoc files from " + sourceDirectory + " to " + outputDirectory + " with backend=" + backend);
             for (File file : scanSourceFiles()) {
                 setDestinationPaths(optionsBuilder, file);
-                asciidoctor.renderFile(file, optionsBuilder.get());
+                asciidoctor.convertFile(file, optionsBuilder.get());
             }
         } else {
             log("Render " + sourceDocumentName + " from " + sourceDirectory + " to " + outputDirectory + " with backend=" + backend);
             File file = new File(sourceDirectory, sourceDocumentName);
             setDestinationPaths(optionsBuilder, file);
-            asciidoctor.renderFile(file, optionsBuilder.get());
+            asciidoctor.convertFile(file, optionsBuilder.get());
         }
 
         try {
@@ -158,17 +163,29 @@ public class AsciidoctorAntTask extends Task {
     private Asciidoctor getAsciidoctorInstance(String gemPath) {
         Asciidoctor asciidoctor;
         if (gemPath == null) {
-            asciidoctor = Asciidoctor.Factory.create();
-        }
-        else {
+            asciidoctor = AsciidoctorJRuby.Factory.create();
+        } else {
             // Replace Windows path separator to avoid paths with mixed \ and /.
             // This happens for instance when setting: <gemPath>${project.build.directory}/gems-provided</gemPath>
             // because the project's path is converted to string.
             String normalizedGemPath = (File.separatorChar == '\\') ? gemPath.replaceAll("\\\\", "/") : gemPath;
-            asciidoctor = Asciidoctor.Factory.create(normalizedGemPath);
+            asciidoctor = AsciidoctorJRuby.Factory.create(normalizedGemPath);
         }
 
-        String gemHome = JRubyRuntimeContext.get(asciidoctor).evalScriptlet("ENV['GEM_HOME']").toString();
+        Ruby rubyInstance;
+        try {
+            rubyInstance = (Ruby) JRubyRuntimeContext.class.getMethod("get").invoke(null);
+        } catch (NoSuchMethodException e) {
+            try {
+                rubyInstance = (Ruby) JRubyRuntimeContext.class.getMethod("get", Asciidoctor.class).invoke(null, asciidoctor);
+            } catch (Exception e1) {
+                throw new BuildException("Failed to invoke get(AsciiDoctor) for JRubyRuntimeContext", e1);
+            }
+        } catch (Exception e) {
+            throw new BuildException("Failed to invoke get for JRubyRuntimeContext", e);
+        }
+
+        String gemHome = rubyInstance.evalScriptlet("ENV['GEM_HOME']").toString();
         String gemHomeExpected = (gemPath == null || "".equals(gemPath)) ? "" : gemPath.split(java.io.File.pathSeparator)[0];
 
         if (!"".equals(gemHome) && !gemHomeExpected.equals(gemHome)) {
@@ -190,7 +207,7 @@ public class AsciidoctorAntTask extends Task {
         return optionsBuilder;
     }
 
-    private void setDestinationPaths(OptionsBuilder optionsBuilder, final File sourceFile)  {
+    private void setDestinationPaths(OptionsBuilder optionsBuilder, final File sourceFile) {
         optionsBuilder.baseDir(computeBaseDir(sourceFile));
         try {
             if (preserveDirectories) {
@@ -269,7 +286,7 @@ public class AsciidoctorAntTask extends Task {
             final DirectoryWalker directoryWalker = new CustomExtensionDirectoryWalker(absoluteSourceDirectory, Arrays.asList(extensions.split(",")));
             asciidoctorFiles = directoryWalker.scan();
         }
-        for (Iterator<File> iter = asciidoctorFiles.iterator(); iter.hasNext();) {
+        for (Iterator<File> iter = asciidoctorFiles.iterator(); iter.hasNext(); ) {
             File f = iter.next();
             do {
                 // stop when we hit the source directory root
@@ -421,6 +438,7 @@ public class AsciidoctorAntTask extends Task {
         public void setKey(String key) {
             this.key = key;
         }
+
         @SuppressWarnings("UnusedDeclaration")
         public void setValue(String value) {
             this.value = value;
@@ -436,7 +454,7 @@ public class AsciidoctorAntTask extends Task {
 
         @Override
         public boolean accept(File pathname) {
-           return includedFiles.contains(pathname.getName());
+            return includedFiles.contains(pathname.getName());
         }
     }
 
@@ -446,7 +464,7 @@ public class AsciidoctorAntTask extends Task {
      * @param s New value of safe. Case is ignored. Not required-default is SAFE.
      */
     public void setSafemode(String s) {
-      safe = SafeMode.valueOf(s.toUpperCase());
+        safe = SafeMode.valueOf(s.toUpperCase());
     }
 
     @SuppressWarnings("UnusedDeclaration")
